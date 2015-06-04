@@ -274,7 +274,6 @@ wait_for_state() {
         return 1
     fi
 
-    msg "Checking $WAITER_ATTEMPTS times, every $WAITER_INTERVAL seconds, for instance $instance_id to be in state $state_name"
 
     local instance_state=$($instance_state_cmd)
     local count=1
@@ -293,6 +292,8 @@ wait_for_state() {
             fi
         fi
     fi
+
+    msg "Checking $WAITER_ATTEMPTS times, every $WAITER_INTERVAL seconds, for instance $instance_id to be in state $state_name"
 
     msg "Instance is currently in state: $instance_state"
     while [ "$instance_state" != "$state_name" ]; do
