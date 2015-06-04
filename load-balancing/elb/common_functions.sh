@@ -210,6 +210,35 @@ get_instance_state_asg() {
     fi
 }
 
+elb_connection_draining_timeout() {
+    local elb=$1
+
+    local connection_draining_timeout=$($AWS_CLI elb describe-load-balancer-attributes \
+        --load-balancer-name $elb \
+        --query 'LoadBalancerAttributes.ConnectionDraining.Timeout' \
+        --output text)
+    if [ $? != 0 ]; then
+        return 1
+    else
+        echo $connection_draining_timeout
+        return 0
+    fi
+}
+
+elb_connection_draining_enabled() {
+    local elb=$1
+
+    local connection_draining_enabled=$($AWS_CLI elb describe-load-balancer-attributes \
+        --load-balancer-name $elb \
+        --query 'LoadBalancerAttributes.ConnectionDraining.Enabled==`true`' \
+        --output text)
+    if [ $? != 0 -o -z "${connection_draining_enabled}" ]; then
+        return 1
+    else
+        return 0
+    fi
+}
+
 reset_waiter_timeout() {
     local elb=$1
 
@@ -249,6 +278,21 @@ wait_for_state() {
 
     local instance_state=$($instance_state_cmd)
     local count=1
+    local timeout=$(($WAITER_ATTEMPTS * $WAITER_INTERVAL))
+
+    # If there is a connection draining timeout value in the
+    # related ELB, we need to take care not to timeout before that
+    # period is reached.
+    if [ "${instance_state}" = "Standby" ] ; then
+        if elb_connection_draining_enabled $elb ; then
+            local connection_draining_timeout=$(elb_connection_draining_timeout $elb)
+            if [ $connection_draining_timeout -gt $timeout ] ; then
+                # If the WAITER_INTERVAL is greater than the default
+                # of 1, this could be a really long timeout.
+                WAITER_ATTEMPTS=$connection_draining_timeout
+            fi
+        fi
+    fi
 
     msg "Instance is currently in state: $instance_state"
     while [ "$instance_state" != "$state_name" ]; do
