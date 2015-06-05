@@ -213,6 +213,16 @@ get_instance_state_asg() {
 elb_connection_draining_timeout() {
     local elb=$1
 
+    if [ -z "${elb}" ] ; then
+        local instance_id
+        instance_id=$(get_instance_id)
+        local asg_name=$(autoscaling_group_name $instance_id)
+        elb=$(get_elb_from_asg_name $asg_name)
+        if [ $? -gt 0 ] ; then
+            return 1
+        fi
+    fi
+
     local connection_draining_timeout=$($AWS_CLI elb describe-load-balancer-attributes \
         --load-balancer-name $elb \
         --query 'LoadBalancerAttributes.ConnectionDraining.Timeout' \
@@ -228,6 +238,16 @@ elb_connection_draining_timeout() {
 elb_connection_draining_enabled() {
     local elb=$1
 
+    if [ -z "${elb}" ] ; then
+        local instance_id=$(get_instance_id)
+        local asg_name=$(autoscaling_group_name $instance_id)
+        elb=$(get_elb_from_asg_name $asg_name)
+        if [ $? -gt 0 ] ; then
+            return 1
+        fi
+    fi
+
+    msg "Checking ELB '${elb}' for Connection Draining Status..."
     local connection_draining_enabled=$($AWS_CLI elb describe-load-balancer-attributes \
         --load-balancer-name $elb \
         --query 'LoadBalancerAttributes.ConnectionDraining.Enabled==`true`' \
@@ -282,14 +302,19 @@ wait_for_state() {
     # If there is a connection draining timeout value in the
     # related ELB, we need to take care not to timeout before that
     # period is reached.
-    if [ "${instance_state}" = "Standby" ] ; then
-        if elb_connection_draining_enabled $elb ; then
-            local connection_draining_timeout=$(elb_connection_draining_timeout $elb)
+    if [ "${state_name}" = "Standby" ] ; then
+        msg "Checking ELB Connection Draining status for ELB '${elb}'..."
+        local connection_draining_timeout=$(elb_connection_draining_timeout $elb)
+        if [ $? -gt 0 -o -n "${connection_draining_timeout}" ] ; then
+            msg "ELB Connection Draining is enabled, timeout value: ${connection_draining_timeout}"
             if [ $connection_draining_timeout -gt $timeout ] ; then
                 # If the WAITER_INTERVAL is greater than the default
                 # of 1, this could be a really long timeout.
+                msg "Updating timeout: ${connection_draining_timeout}"
                 WAITER_ATTEMPTS=$connection_draining_timeout
             fi
+        else
+            msg "ELB Connection Draining is not enabled."
         fi
     fi
 
@@ -400,11 +425,32 @@ get_elb_list() {
 
     if [ -z "$elb_list" ]; then
         return 1
-    else 
+    else
         msg "Got load balancer list of: $elb_list"
         INSTANCE_ELBS=$elb_list
         return 0
     fi
+}
+
+get_elb_from_asg_name() {
+    local asg_name=$1
+
+    if [ -z "${asg_name}" ] ; then
+        msg "Need ASG name to resolve associated ELB name."
+        return 1
+    fi
+
+    local elb=$($AWS_CLI autoscaling \
+        describe-auto-scaling-groups \
+        --query 'AutoScalingGroups[].LoadBalancerNames[]' \
+        --auto-scaling-group-names ${asg_name} --output=text)
+
+    if [ -z "${elb}" ] ; then
+        return 1
+    fi
+
+    echo $elb
+    return 0
 }
 
 # Usage: deregister_instance <EC2 instance ID> <ELB name>
